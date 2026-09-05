@@ -5,11 +5,14 @@ const t = std.testing;
 const payload = @embedFile("Fixtures/payload.bin");
 
 fn unpack(bytes: []const u8, budget: u32) !void {
+    return unpackExpected(bytes, payload, budget);
+}
+fn unpackExpected(bytes: []const u8, expected: []const u8, budget: u32) !void {
     var entries: [8]wire.Entry = undefined;
     const info = try core.inspect(bytes, &entries);
     try t.expectEqual(@as(u32, 1), info.files);
-    try t.expectEqual(@as(u64, payload.len), info.total_bytes);
-    const output = try t.allocator.alloc(u8, payload.len + 2);
+    try t.expectEqual(@as(u64, expected.len), info.total_bytes);
+    const output = try t.allocator.alloc(u8, expected.len + 2);
     defer t.allocator.free(output);
     @memset(output, 0x5a);
     const work = try t.allocator.create(wire.Work);
@@ -21,9 +24,9 @@ fn unpack(bytes: []const u8, budget: u32) !void {
         progress = try core.step(&work.data, budget);
         try t.expect(progress.written >= before and progress.written - before <= budget);
         steps += 1;
-        if (steps > payload.len + 10) return error.TestUnexpectedResult;
+        if (steps > expected.len + 10) return error.TestUnexpectedResult;
     }
-    try t.expectEqualSlices(u8, payload, output[1 .. output.len - 1]);
+    try t.expectEqualSlices(u8, expected, output[1 .. output.len - 1]);
     try t.expectEqual(@as(u8, 0x5a), output[0]);
     try t.expectEqual(@as(u8, 0x5a), output[output.len - 1]);
     try t.expectEqual(progress, try core.step(&work.data, budget));
@@ -34,6 +37,11 @@ test "Stored and Deflate with 32/64-bit descriptors and local/end ZIP64" {
         try unpack(@embedFile("Fixtures/" ++ file), 32768);
     }
     try unpack(@embedFile("Fixtures/deflate.zip"), wire.min_step_bytes);
+}
+
+test "fixed-to-stored Deflate transition respects the remaining step budget" {
+    for ([_]u32{ wire.min_step_bytes, 333, 32768 }) |budget|
+        try unpackExpected(@embedFile("Fixtures/mixed-blocks.zip"), @embedFile("Fixtures/mixed-blocks.bin"), budget);
 }
 
 test "portable paths, case collisions and file-parent conflicts precede extraction" {

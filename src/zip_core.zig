@@ -252,11 +252,12 @@ pub fn inspect(bytes: []const u8, storage: []wire.Entry) Error!wire.Info {
 // Caller-owned private format. Increment magic on incompatible state layout
 // changes. No allocation, I/O, protocol context or callback survives a call.
 const magic: u64 = 0x31504f5a34525354;
+const Deflate = @import("flate/Decompress.zig");
 const State = struct {
     magic: u64,
     owner: usize,
     input: std.Io.Reader,
-    decoder: std.compress.flate.Decompress,
+    decoder: Deflate,
     output: []u8,
     written: usize,
     expected_crc: u32,
@@ -311,7 +312,7 @@ fn advance(state: *State, budget: u32) Error!wire.Progress {
         // in the caller's workspace between dispatches.
         state.input.vtable = std.Io.Reader.fixed(state.input.buffer).vtable;
         state.decoder.input = &state.input;
-        state.decoder.reader.vtable = std.compress.flate.Decompress.init(&state.input, .raw, &.{}).reader.vtable;
+        state.decoder.reader.vtable = Deflate.init(&state.input, .raw, &.{}).reader.vtable;
         var writer = std.Io.Writer.fixed(state.output);
         writer.end = before;
         // Clamp to the declared output remainder. A final empty stored
