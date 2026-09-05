@@ -776,4 +776,3 @@ fn HuffmanDecoder(
         }
     };
 }
-
