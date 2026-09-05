@@ -1,0 +1,41 @@
+﻿R4ZIP: ZIP-Leseprotokoll
+======================
+
+R4ZIP.R4P 0.1.0, Rolle format.zip, R4M0-Protokoll mit R4DEV:Query:1.
+Die einzige API-Wahrheit fuer Aufrufer ist Repositories/SDK/r4os/zip.zig.
+inspect liefert das gepruefte zentrale Verzeichnis und u64-Summengroessen;
+begin bindet einen erneut geprueften Eintrag an unveraenderlichen Quell-
+speicher, Ausgabe und 16-KB-Arbeitsbereich. step verarbeitet 258 Bytes bis
+4 MB Ausgabe. Nach jedem Schritt kann der Aufrufer zeichnen, Yield aufrufen
+oder den gesamten Zustand verwerfen. Es werden weder Heap noch Dateisystem,
+Netzwerk oder globale Modulsitzungen benoetigt. Erneutes step nach Erfolg
+liefert denselben Abschluss, ein Decoderfehler macht den Zustand ungueltig.
+
+Unterstuetzte Varianten: Stored (0), raw Deflate (8), regulaere EOCD sowie
+ZIP64-EOCD/Locator, benoetigte zentrale ZIP64-Extrafelder in festgelegter
+Reihenfolge, lokale ZIP64-Groessenpaare und 32-/64-Bit-Data-Descriptor mit
+oder ohne Signatur. Zentraler und lokaler Header, Namen, Groessen, CRC und
+physische Bereiche muessen zusammenpassen. Auch das exakte Ende des
+komprimierten Stroms und der vollstaendige CRC32 werden geprueft.
+
+Keine Verschluesselung, Split-Volumes, Symlinks/Spezialdateien, Erweiterungen
+ueber Version 4.5, andere Kompressionsmethoden oder Codepage-/Unicode-Namen.
+Pfadvertrag: hoechstens 255 druckbare ASCII-Bytes, relative Slash-Komponenten,
+keine leeren oder .-/..-Komponenten, Backslashes, Laufwerkspraefixe,
+Steuerzeichen, Windows-Sonderzeichen oder abschliessenden Punkte/Leerzeichen.
+Namen sind ohne Beachtung der Grossschreibung eindeutig, eine Datei darf
+kein Elternpfad sein. Hoeschstens 4096 Eintraege. Das Produkt begrenzt zudem
+Archiv-, Ausgabe- und RAM-Groessen vor seinen eigenen Schreiboperationen.
+
+ZIP64-Unterstuetzung bedeutet nicht, dass ein Produkt beliebig grosse
+Pakete akzeptiert. Das Schrittbudget begrenzt erzeugte Ausgabe, nicht eine
+harte CPU-Zeit fuer beliebig konstruierte Deflate-Stroeme. Die Eingabe ist
+immer ein endlicher, vom Aufrufer begrenzter Speicherbereich.
+
+Tests/main.zig prueft echte Stored-/Deflate-Ausgabe, .NET ZipFile Optimal,
+ZIP64, beide Descriptorsignaturen, Ausgabecanaries, kleine Schrittbudgets,
+CRC-Fehler, abgeschnittene Archive, veraltete Entries, Arbeitsbereichsfehler,
+Traversal, Namenskollisionen, Dateieltern und ueberlappende lokale Records.
+Fixtures/payload.bin ist 5000-mal ASCII "R4OS Recovery ZIP\n"; weitere
+Fixtures enthalten nur kuenstliche R4OS-Daten und gezielt geaenderte Records.
+Referenz: PKWARE APPNOTE 6.3.10 (2022-11-01), Abschnitt 4.3/4.5.
