@@ -45,21 +45,24 @@ fn dispatch(op: u32, input: *const r4os.abi.ProtocolBuffer, output: *r4os.abi.Pr
             out.* = try core.inspect(bytes[0..@intCast(request.archive_bytes)], entries[0..request.entry_capacity]);
             output.len = @sizeOf(wire.Info);
         },
-        wire.op_begin => {
+        wire.op_begin, wire.op_begin_stream => {
             const out = try outputAs(wire.Progress, output);
             const bytes = request.archive orelse return error.BadRequest;
             const entry = request.entry orelse return error.BadRequest;
             const work = request.work orelse return error.BadRequest;
             const decoded = request.output orelse return error.BadRequest;
             if (request.work_len != wire.work_bytes) return error.BadRequest;
-            out.* = try core.begin(bytes[0..@intCast(request.archive_bytes)], entry.*, decoded[0..@intCast(request.output_bytes)], work[0..wire.work_bytes]);
+            out.* = if (op == wire.op_begin)
+                try core.begin(bytes[0..@intCast(request.archive_bytes)], entry.*, decoded[0..@intCast(request.output_bytes)], work[0..wire.work_bytes])
+            else
+                try core.beginStream(bytes[0..@intCast(request.archive_bytes)], entry.*, decoded[0..@intCast(request.output_bytes)], work[0..wire.work_bytes]);
             output.len = @sizeOf(wire.Progress);
         },
-        wire.op_step => {
+        wire.op_step, wire.op_step_stream => {
             const out = try outputAs(wire.Progress, output);
             const work = request.work orelse return error.BadRequest;
             if (request.work_len != wire.work_bytes) return error.BadRequest;
-            out.* = try core.step(work[0..wire.work_bytes], request.step_bytes);
+            out.* = if (op == wire.op_step) try core.step(work[0..wire.work_bytes], request.step_bytes) else try core.streamStep(work[0..wire.work_bytes], request.step_bytes);
             output.len = @sizeOf(wire.Progress);
         },
         else => return error.Unsupported,

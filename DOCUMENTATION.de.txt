@@ -1,7 +1,7 @@
 ﻿R4ZIP: ZIP-Leseprotokoll
 ======================
 
-R4ZIP.R4P 0.1.1, Rolle format.zip, R4M0-Protokoll mit R4DEV:Query:1.
+R4ZIP.R4P 0.1.2, Rolle format.zip, R4M0-Protokoll mit R4DEV:Query:1.
 Die einzige API-Wahrheit fuer Aufrufer ist Repositories/SDK/r4os/zip.zig.
 inspect liefert das gepruefte zentrale Verzeichnis und u64-Summengroessen;
 begin bindet einen erneut geprueften Eintrag an unveraenderlichen Quell-
@@ -10,6 +10,15 @@ speicher, Ausgabe und 16-KB-Arbeitsbereich. step verarbeitet 258 Bytes bis
 oder den gesamten Zustand verwerfen. Es werden weder Heap noch Dateisystem,
 Netzwerk oder globale Modulsitzungen benoetigt. Erneutes step nach Erfolg
 liefert denselben Abschluss, ein Decoderfehler macht den Zustand ungueltig.
+
+Die additiven Operationen beginStream/streamStep (4/5) entpacken ohne
+vollstaendigen Ausgabepuffer. Das Standardfenster besitzt 32 KB History plus
+128 KB neue Ausgabe. Progress.written bleibt die Gesamtausgabe;
+Progress.reserved nennt ausschliesslich bei diesen Operationen die neuen
+Bytes ab Fensteroffset 32768. Der Aufrufer konsumiert diese vor dem naechsten
+Schritt. Das Fenster und die Quelle bleiben stabil, CRC32 und exaktes Ende
+gelten fuer den gesamten Strom. Nach Abschluss liefert ein weiterer Schritt
+keine neuen Bytes. Alte Operationen und deren Wiregroessen bleiben erhalten.
 
 Unterstuetzte Varianten: Stored (0), raw Deflate (8), regulaere EOCD sowie
 ZIP64-EOCD/Locator, benoetigte zentrale ZIP64-Extrafelder in festgelegter

@@ -251,7 +251,7 @@ pub fn inspect(bytes: []const u8, storage: []wire.Entry) Error!wire.Info {
 
 // Caller-owned private format. Increment magic on incompatible state layout
 // changes. No allocation, I/O, protocol context or callback survives a call.
-const magic: u64 = 0x31504f5a34525354;
+const magic: u64 = 0x32504f5a34525354;
 const Deflate = @import("flate/Decompress.zig");
 const State = struct {
     magic: u64,
@@ -260,6 +260,9 @@ const State = struct {
     decoder: Deflate,
     output: []u8,
     written: usize,
+    expected_bytes: usize,
+    streaming: bool,
+    window_end: usize,
     expected_crc: u32,
     crc: std.hash.Crc32,
     method: u16,
@@ -269,17 +272,29 @@ comptime {
     if (@sizeOf(State) > wire.work_bytes or @alignOf(State) > wire.work_alignment) @compileError("ZIP workspace contract too small");
 }
 pub fn begin(bytes: []const u8, entry: wire.Entry, output: []u8, work: []align(wire.work_alignment) u8) Error!wire.Progress {
+    return beginMode(bytes, entry, output, work, false);
+}
+pub fn beginStream(bytes: []const u8, entry: wire.Entry, output: []u8, work: []align(wire.work_alignment) u8) Error!wire.Progress {
+    return beginMode(bytes, entry, output, work, true);
+}
+fn beginMode(bytes: []const u8, entry: wire.Entry, output: []u8, work: []align(wire.work_alignment) u8, streaming: bool) Error!wire.Progress {
     if (work.len != wire.work_bytes or overlap(bytes, work) or overlap(output, work) or overlap(bytes, output)) return error.BadRequest;
     const state: *State = @ptrCast(work.ptr);
     state.magic = 0;
     const parsed = try readEntry(bytes, entry.central_offset, try directory(bytes));
     if (!std.meta.eql(parsed.entry, entry)) return error.Stale;
-    if (entry.bytes > output.len) return error.OutputTooSmall;
+    if (entry.bytes > std.math.maxInt(usize)) return error.Limit;
+    if (streaming) {
+        if (output.len < wire.stream_history_bytes + wire.min_step_bytes) return error.OutputTooSmall;
+    } else if (entry.bytes > output.len) return error.OutputTooSmall;
     const compressed = try range(bytes, entry.data_offset, entry.compressed_bytes);
     state.owner = @intFromPtr(state);
     state.input = std.Io.Reader.fixed(compressed);
     state.decoder = .init(&state.input, .raw, &.{});
-    state.output = output[0..@intCast(entry.bytes)];
+    state.output = if (streaming) output else output[0..@intCast(entry.bytes)];
+    state.expected_bytes = @intCast(entry.bytes);
+    state.streaming = streaming;
+    state.window_end = wire.stream_history_bytes;
     state.written = 0;
     state.expected_crc = entry.crc32;
     state.crc = .init();
@@ -289,9 +304,16 @@ pub fn begin(bytes: []const u8, entry: wire.Entry, output: []u8, work: []align(w
     return .{};
 }
 pub fn step(work: []align(wire.work_alignment) u8, budget: u32) Error!wire.Progress {
+    return stepMode(work, budget, false);
+}
+pub fn streamStep(work: []align(wire.work_alignment) u8, budget: u32) Error!wire.Progress {
+    return stepMode(work, budget, true);
+}
+fn stepMode(work: []align(wire.work_alignment) u8, budget: u32, streaming: bool) Error!wire.Progress {
     if (work.len != wire.work_bytes or budget < wire.min_step_bytes or budget > wire.max_step_bytes) return error.BadRequest;
     const state: *State = @ptrCast(work.ptr);
     if (state.magic != magic or state.owner != @intFromPtr(state)) return error.Stale;
+    if (state.streaming != streaming) return error.BadRequest;
     return advance(state, budget) catch |err| {
         state.magic = 0;
         return err;
@@ -299,26 +321,34 @@ pub fn step(work: []align(wire.work_alignment) u8, budget: u32) Error!wire.Progr
 }
 fn advance(state: *State, budget: u32) Error!wire.Progress {
     if (state.finished) return .{ .written = state.written, .done = 1 };
-    const before = state.written;
+    const total_before = state.written;
+    if (state.streaming) {
+        const keep = @min(total_before, wire.stream_history_bytes);
+        @memmove(state.output[wire.stream_history_bytes - keep .. wire.stream_history_bytes], state.output[state.window_end - keep .. state.window_end]);
+    }
+    const before = if (state.streaming) wire.stream_history_bytes else total_before;
+    const limit = @min(@as(usize, budget), state.output.len - before);
+    const remaining = state.expected_bytes - total_before;
+    var end = before;
     var ended = false;
     if (state.method == 0) {
-        const count = @min(budget, state.output.len - before);
-        @memcpy(state.output[before..][0..count], state.input.buffer[before..][0..count]);
-        state.written += count;
-        state.input.seek = state.written;
-        ended = state.written == state.output.len;
+        const count = @min(limit, remaining);
+        @memcpy(state.output[before..][0..count], state.input.buffer[total_before..][0..count]);
+        end += count;
+        state.input.seek = total_before + count;
+        ended = count == remaining;
     } else {
         // Restore current module vtables on entry; only decoder data is kept
         // in the caller's workspace between dispatches.
         state.input.vtable = std.Io.Reader.fixed(state.input.buffer).vtable;
         state.decoder.input = &state.input;
         state.decoder.reader.vtable = Deflate.init(&state.input, .raw, &.{}).reader.vtable;
-        var writer = std.Io.Writer.fixed(state.output);
-        writer.end = before;
+        const origin = if (state.streaming) wire.stream_history_bytes - @min(total_before, wire.stream_history_bytes) else 0;
+        var writer = std.Io.Writer.fixed(state.output[origin..]);
+        writer.end = before - origin;
         // Clamp to the declared output remainder. A final empty stored
         // Deflate block must still be consumed with a zero-byte limit, while
         // pending literals/matches after that boundary are an invalid size.
-        const remaining = state.output.len - before;
         if (remaining == 0) switch (state.decoder.state) {
             .fixed_block_literal, .dynamic_block_literal, .fixed_block_match, .dynamic_block_match => return error.InvalidArchive,
             else => {},
@@ -326,20 +356,22 @@ fn advance(state: *State, budget: u32) Error!wire.Progress {
         const input_before = state.input.seek;
         const bits_before = state.decoder.consumed_bits;
         const tag_before = std.meta.activeTag(state.decoder.state);
-        _ = state.decoder.reader.stream(&writer, .limited(@min(budget, remaining))) catch |err| switch (err) {
+        _ = state.decoder.reader.stream(&writer, .limited(@min(limit, remaining))) catch |err| switch (err) {
             error.EndOfStream => 0,
             else => return error.Inflate,
         };
-        state.written = writer.end;
+        end = origin + writer.end;
         ended = state.decoder.state == .end;
-        if (!ended and writer.end == before and state.input.seek == input_before and
+        if (!ended and end == before and state.input.seek == input_before and
             state.decoder.consumed_bits == bits_before and std.meta.activeTag(state.decoder.state) == tag_before) return error.InvalidArchive;
     }
-    state.crc.update(state.output[before..state.written]);
+    state.written = total_before + end - before;
+    state.window_end = end;
+    state.crc.update(state.output[before..end]);
     if (ended) {
-        if (state.written != state.output.len or state.input.seek != state.input.end) return error.InvalidArchive;
+        if (state.written != state.expected_bytes or state.input.seek != state.input.end) return error.InvalidArchive;
         if (state.crc.final() != state.expected_crc) return error.Checksum;
         state.finished = true;
     }
-    return .{ .written = state.written, .done = @intFromBool(ended) };
+    return .{ .written = state.written, .done = @intFromBool(ended), .reserved = if (state.streaming) @intCast(end - before) else 0 };
 }

@@ -1,7 +1,7 @@
 R4OS_MODULE_MANIFEST=2
 KIND=R4P
 NAME=R4ZIP
-VERSION=0.1.1
+VERSION=0.1.2
 LANGUAGE=Zig
 SOURCE=src/main.zig
 TARGET=/R4OS/PROTOCOLS/R4ZIP.R4P
@@ -14,5 +14,6 @@ META=module.name=R4P_R4ZIP
 META=description=ZIP inspection and bounded Stored Deflate extraction
 META=feature=zip64
 META=feature=caller-owned-state
+META=feature=bounded-stream-window
 META=feature=crc32
 META=feature=portable-paths

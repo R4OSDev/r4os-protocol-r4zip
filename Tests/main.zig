@@ -7,6 +7,56 @@ const payload = @embedFile("Fixtures/payload.bin");
 fn unpack(bytes: []const u8, budget: u32) !void {
     return unpackExpected(bytes, payload, budget);
 }
+
+test "stream extraction preserves bounded history, CRC and output boundaries" {
+    inline for (.{ "stored.zip", "deflate.zip", "mixed-blocks.zip", "empty-stored-block.zip", "final-empty-block.zip" }) |name| {
+        const bytes = @embedFile("Fixtures/" ++ name);
+        const expected = if (std.mem.eql(u8, name, "mixed-blocks.zip")) @embedFile("Fixtures/mixed-blocks.bin") else if (std.mem.eql(u8, name, "empty-stored-block.zip")) "" else if (std.mem.eql(u8, name, "final-empty-block.zip")) "abc" else payload;
+        for ([_]u32{ wire.min_step_bytes, 333, 32768 }) |budget| {
+            var entries: [8]wire.Entry = undefined;
+            _ = try core.inspect(bytes, &entries);
+            const window = try t.allocator.alloc(u8, wire.stream_history_bytes + budget + 2);
+            defer t.allocator.free(window);
+            @memset(window, 0x5a);
+            const work = try t.allocator.create(wire.Work);
+            defer t.allocator.destroy(work);
+            var progress = try core.beginStream(bytes, entries[0], window[1 .. window.len - 1], &work.data);
+            try t.expectError(error.BadRequest, core.step(&work.data, budget));
+            var at: usize = 0;
+            var steps: usize = 0;
+            while (progress.done == 0) {
+                progress = try core.streamStep(&work.data, budget);
+                const count = progress.reserved;
+                try t.expect(count <= budget);
+                try t.expectEqual(at + count, progress.written);
+                try t.expectEqualSlices(u8, expected[at..][0..count], window[1 + wire.stream_history_bytes ..][0..count]);
+                at += count;
+                steps += 1;
+                try t.expect(steps <= expected.len + 10);
+            }
+            try t.expectEqual(expected.len, at);
+            try t.expectEqual(@as(u32, 0), (try core.streamStep(&work.data, budget)).reserved);
+            try t.expectEqual(@as(u8, 0x5a), window[0]);
+            try t.expectEqual(@as(u8, 0x5a), window[window.len - 1]);
+        }
+    }
+    const bad = try t.allocator.dupe(u8, @embedFile("Fixtures/stored.zip"));
+    defer t.allocator.free(bad);
+    var entries: [8]wire.Entry = undefined;
+    _ = try core.inspect(bad, &entries);
+    bad[@intCast(entries[0].data_offset)] ^= 1;
+    var work: wire.Work = .{};
+    var window: [wire.stream_buffer_bytes]u8 = undefined;
+    _ = try core.beginStream(bad, entries[0], &window, &work.data);
+    while (true) {
+        const progress = core.streamStep(&work.data, 128 * 1024) catch |err| {
+            try t.expectEqual(error.Checksum, err);
+            break;
+        };
+        try t.expectEqual(@as(u32, 0), progress.done);
+    }
+    try t.expectError(error.Stale, core.streamStep(&work.data, 128 * 1024));
+}
 fn unpackExpected(bytes: []const u8, expected: []const u8, budget: u32) !void {
     var entries: [8]wire.Entry = undefined;
     const info = try core.inspect(bytes, &entries);

@@ -10,6 +10,10 @@ the immutable archive, entry table, output and 16 KB decoder state. Call
 between calls. Release manifests and target filesystem policy belong to the
 consumer. No host unzip program or global decoder session is required.
 
+For large images, `beginStream` and `streamStep` use a fixed 160 KB output
+window including 32 KB of Deflate history. Consume each returned chunk before
+the next step; full-stream CRC and declared length checks still apply.
+
 `Build.sh test install` on Linux or `Build.bat test install` on Windows uses
 PowerShell 7, the Zig version and owner roots from `Settings.R4S`. An isolated
 checkout can use Zig 0.16.0 directly with the SDK dependency pinned in
