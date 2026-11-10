@@ -10,7 +10,8 @@ fn range(bytes: []const u8, at: u64, len: u64) Error![]const u8 {
 }
 fn number(comptime T: type, bytes: []const u8, at: u64) Error!T {
     const field = try range(bytes, at, @sizeOf(T));
-    return std.mem.readInt(T, field[0..@sizeOf(T)], .little);
+    var reader = @import("r4os").binary_cursor.Reader.init(field) catch return error.Bounds;
+    return reader.readInt(T, .little) catch error.Bounds;
 }
 fn add(a: u64, b: u64) Error!u64 {
     return std.math.add(u64, a, b) catch error.Bounds;

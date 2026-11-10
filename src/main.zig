@@ -2,13 +2,15 @@ const r4os = @import("r4os");
 const wire = r4os.zip;
 const core = @import("zip_core.zig");
 comptime {
-    asm (r4os.r4dev.protocolEntriesAsm("zip_init", "zip_shutdown", "zip_query", "zip_dispatch"));
+    if (!@import("builtin").is_test) asm (r4os.technical2.protocolEntriesAsm("zip_init", "zip_shutdown", "zip_query", "zip_dispatch"));
 }
-export fn zip_init(api: *const r4os.r4dev.ProtocolApi) callconv(.c) i32 {
-    var ctx = r4os.r4dev.ProtocolContext.init(api);
-    _ = ctx.registerRole(wire.role, .data, 0);
-    _ = ctx.setStatus(.active, "ZIP ready");
-    return 0;
+export fn zip_init(api: *const r4os.r4dev.ProtocolApi2) callconv(.c) i32 {
+    var ctx = r4os.r4dev.ProtocolContext2.init(api);
+    if (!ctx.requires(.{ "register_role", "set_status" })) return r4os.abi.err_no_fn;
+    const registered = ctx.registerRole(wire.role, .data, 0);
+    if (registered != 0) return registered;
+    const result = ctx.setStatus(.active, "ZIP ready");
+    return result;
 }
 export fn zip_shutdown() callconv(.c) i32 {
     return 0;
@@ -18,16 +20,16 @@ export fn zip_query(out: *r4os.abi.ProtocolStatus) callconv(.c) i32 {
     return 0;
 }
 fn requestOf(input: *const r4os.abi.ProtocolBuffer) wire.Error!*const wire.Request {
-    const ptr = input.data orelse return error.BadRequest;
-    if (input.len != @sizeOf(wire.Request) or @intFromPtr(ptr) % @alignOf(wire.Request) != 0) return error.BadRequest;
-    const request: *const wire.Request = @ptrCast(@alignCast(ptr));
-    if (request.version != wire.contract_version or request.size != @sizeOf(wire.Request) or request.reserved != 0) return error.BadRequest;
+    const native = r4os.native_protocol_view;
+    const request = (native.Input(wire.Request).init(input, native.Policy.versioned(wire.Request, wire.contract_version, .input, .exact)) catch return error.BadRequest).value;
+    if (request.reserved != 0) return error.BadRequest;
     return request;
 }
 fn outputAs(comptime T: type, output: *r4os.abi.ProtocolBuffer) wire.Error!*T {
-    const ptr = output.data orelse return error.BadRequest;
-    if (output.capacity < @sizeOf(T) or @intFromPtr(ptr) % @alignOf(T) != 0) return error.OutputTooSmall;
-    return @ptrCast(@alignCast(ptr));
+    if (output.data == null) return error.BadRequest;
+    const native = r4os.native_protocol_view;
+    const view = native.Output(T).init(output, native.Policy.record(T, .output, .prefix)) catch return error.OutputTooSmall;
+    return @ptrCast(@alignCast(view.buffer.data.?));
 }
 export fn zip_dispatch(op: u32, input: *const r4os.abi.ProtocolBuffer, output: *r4os.abi.ProtocolBuffer) callconv(.c) i32 {
     output.len = 0;
